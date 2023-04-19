@@ -1,0 +1,244 @@
+
+
+{
+  "lsp_action": "hover",
+  "type_categories": [
+    {
+      "category": "concurrency",
+      "keywords": ["coinit", "coyield", "coresume"],
+      "keyword_details": [
+        {
+          "keyword": "coinit",
+          "syntax": "coinit func(args)",
+          "type": "keyword",
+          "node_type": ["@function.builtin"],
+          "description": "The coinit creates a new fiber from a function call syntax.",
+          "example": "myFiber = coinit MyFunction()"
+        },
+        {
+          "keyword": "coyield",
+          "syntax": "coyield",
+          "type": "keyword",
+          "node_type": ["@function.builtin"],
+          "description": "The coyield keyword suspends the current fiber and returns a value to the parent fiber.",
+          "example": "coyield"
+        },
+        {
+          "keyword": "coresume",
+          "syntax": "coresume fiber, [args]",
+          "type": "keyword",
+          "node_type": ["@function.builtin"],
+          "description": "The coresume keyword resumes a suspended fiber and returns a value from the fiber.",
+          "example": "coresume myFiber, 123"
+        }
+      ]
+    },
+    {
+      "category": "control-flow",
+      "keywords": [ "if", "then", "else", "match", "while", "for", "each", "break", "continue", "pass" ],
+      "keyword_details": [
+        {
+          "keyword": "if",
+          "syntax": "if <condition> then <block> [else <block>]",
+          "type": "keyword",
+          "node_type": ["@keyword"],
+          "description": "The if keyword is used to execute a block of code if a condition is true.",
+          "example": "if a == 10 then print 'a is 10' else a == 20 then print 'a is 20' else print 'neither 10 nor 20'"
+        },
+        {
+          "keyword": "then",
+          "syntax": "if <condition> then <block> [else <block>]",
+          "type": "keyword",
+          "node_type": ["@keyword"],
+          "description": "The then keyword is used to execute a block of code if a condition is true.",
+          "example": "if a == 10 then print 'a is 10' else a == 20 then print 'a is 20' else print 'neither 10 nor 20'"
+        },
+        {
+          "keyword": "else",
+          "syntax": "if <condition> then <block> [else <block>]",
+          "type": "keyword",
+          "node_type": ["@keyword"],
+          "description": "The else keyword is used to execute a block of code if the previous if or conditional else clause was false.",
+          "example": "if a == 10 then print 'a is 10' else a == 20 then print 'a is 20' else print 'neither 10 nor 20'"
+        },
+        {
+          "keyword": "match",
+          "syntax": "match <expression>:\n    <case> [,\n    <case> ...]\n    [else <block>]",
+          "type": "keyword",
+          "node_type": ["@keyword"],
+          "description": "The match keyword is used to execute a block of code based on the value of an expression.",
+          "example": "match val:\n    0..100: print 'at or between 0 and 99'\n    100: print 'val is 100'\n    200:\n        print 'val is 200'\n    300, 400:\n        print 'combined case'\n    else:\n        print 'val is {val}'"
+        },
+        {
+          "keyword": "while",
+          "syntax": "while <condition>:\n    <block>",
+          "type": "keyword",
+          "node_type": ["@keyword"],
+          "description": "The while keyword is used to execute a block of code repeatedly while a condition is true.",
+          "example": "while a > 5 and a < 15:\n    print 'a is between 5 and 15'"
+        },
+        {
+          "keyword": "for",
+          "syntax": "for <range> each <variable>:\n    <block>",
+          "type": "keyword",
+          "node_type": ["@keyword"],
+          "description": "The for keyword is used to iterate over a range or an iterable object.",
+          "example": "for 0..100 each i:\n    print i"
+        },
+        {
+          "keyword": "each",
+          "syntax": "for <range> each <variable>:\n    <block>",
+          "type": "keyword",
+          "node_type": ["@keyword"],
+          "description": "The each keyword is used to iterate over a range or an iterable object.",
+          "example": "for 0..100 each i:\n    print i"
+        }
+      ]
+    },
+    {
+      "category": "data-types",
+      "keywords": [ "object", "any", "atype", "tagtype", "true", "false", "none", "bool", "number", "int", "string", "list", "map", "error", "fiber", "any" ],
+      "keyword_details": [
+        {
+          "keyword": "object",
+          "syntax": "object <string>: <block> }",
+          "type": "keyword",
+          "node_type": ["@type.builtin"],
+          "description": "The object keyword is used to define a new object type. An object declaration creates a new type.",
+          "example": "object  { name: string, age: number }"
+        },
+        {
+          "keyword": "any",
+          "syntax": "any",
+          "type": "keyword",
+          "node_type": ["@type.builtin"],
+          "description": "A variable with the any type can hold any value. It can only be copied to destinations that also accept the any type. An any value can be used as the callee for a function call or the receiver for a method call. It can be used with any operators.",
+          "example": "myVal any = MyFunc()\n myVal2 any = 123"
+        },
+        {
+          "keyword": "atype",
+          "syntax": "atype <type>",
+          "type": "keyword",
+          "node_type": ["@type.builtin"],
+          "description": "The atype keyword is used to get the type of an object.",
+          "example": "var a: string = 'hello'\nvar t = atype a  -- t is 'string'"
+        },
+        {
+          "keyword": "tagtype",
+          "syntax": "tagtype <tag>",
+          "type": "keyword",
+          "node_type": ["@type.builtin"],
+          "description": "The tagtype keyword is used to get the type of an object with a specific tag.",
+          "example": "var a: { name: string, age: number } = { name: 'John', age: 25 }\nvar t = tagtype a 'name'  -- t is 'string'"
+        },
+        {
+          "keyword": "true",
+          "syntax": "true",
+          "type": "keyword",
+          "node_type": ["@constant"],
+          "description": "The true keyword is a boolean value that represents true.",
+          "example": "var a: bool = true"
+        },
+        {
+          "keyword": "false",
+          "syntax": "false",
+          "type": "keyword",
+          "node_type": ["@constant"],
+          "description": "The false keyword is a boolean value that represents false.",
+          "example": "var a: bool = false"
+        },
+        {
+          "keyword": "none",
+          "syntax": "none",
+          "type": "keyword",
+          "node_type": ["@constant"],
+          "description": "The none keyword is a value that represents the absence of a value.",
+          "example": "var a: any = none"
+        }
+      ]
+    },
+    {
+      "category": "error-handling",
+      "keywords": ["try", "catch", "panic", "recover"],
+      "keyword_details": [
+        {
+          "keyword": "try",
+          "syntax": "try <expression>",
+          "type": "keyword",
+          "node_type": ["@keyword"],
+          "description": "The try expression wraps a value and guarantees a non error value is returned. If the value is an error, execution stops in the current block and the error is returned to the parent call site.",
+          "example": "try MyFunction()\n"
+        },
+        {
+          "keyword": "catch",
+          "syntax": "try <expression>",
+          "type": "keyword",
+          "node_type": ["@keyword"],
+          "description": "The catch expression returns a non error value or swallows the error and returns the none value. If a then clause follows, a default value is returned instead of the none value. ",
+          "example": "res = catch foo() then:\n break 123"
+        },
+        {
+          "keyword": "panic",
+          "syntax": "panic <expression>",
+          "type": "keyword",
+          "node_type": ["@function.builtin"],
+          "description": "Panics are similar to exceptions in other languages. Once the builtin panic is invoked, the current fiber stops execution and begins to unwind its call stack. ",
+          "example": "panic(#danger)"
+        },
+        {
+          "keyword": "recover",
+          "syntax": "recover",
+          "type": "keyword",
+          "node_type": ["@function.builtin"],
+          "description": "While the panic exception is propagated up the call stack, the current fiber can catch the exception in a recover block. The recover block can only be declared at the first indentation level of a scope block.",
+          "example": "recover err:"
+        }
+      ]
+    },
+    {
+      "category": "functions",
+      "keywords": ["func", "return"],
+      "keyword_details": [
+        {
+          "keyword": "func",
+          "syntax": "func <name>([args]) <block>",
+          "type": "keyword",
+          "node_type": ["@function"],
+          "description": "The func keyword is used to define a new function. Static functions are declared with the func keyword and must have a name.",
+          "example": "func MyFunction(a: number, b: number) -> number:\n    return a + b"
+        },
+        {
+          "keyword": "return",
+          "syntax": "return [expression]",
+          "type": "keyword",
+          "node_type": ["@keyword"],
+          "description": "The return keyword is used to return a value from a function.",
+          "example": "func MyFunction(a: number, b: number):\n return a + b"
+        }
+      ]
+    },
+    {
+      "category": "modules",
+      "keywords": ["import", "export"],
+      "keyword_details": [
+        {
+          "keyword": "import",
+          "syntax": "import <name> <stringv>",
+          "type": "keyword",
+          "node_type": ["@keyword"],
+          "description": "Import declarations create a local alias to the module referenced by the import specifier.",
+          "example": "import t 'test'"
+        },
+        {
+          "keyword": "export",
+          "syntax": "export <name> [as <alias>]",
+          "type": "keyword",
+          "node_type": ["@keyword"],
+          "description": "Use the export prefix in front of static declarations to indicate that it should be exported when the script’s module is loaded.",
+          "example": "export func foo():"
+        }
+      ]
+    }
+  ]
+}
+

@@ -1,0 +1,6 @@
+[workspace]
+members = [
+  "crates/cyber-lsp",
+  "crates/cyber-tree-sitter",
+  "crates/cyber-highlight",
+]

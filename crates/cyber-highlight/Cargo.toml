@@ -1,0 +1,17 @@
+[package]
+name = "cyber-highlight"
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+
+[lib]
+doctest = false
+
+[dependencies]
+cyber-tree-sitter = { path = "../cyber-tree-sitter" }
+ropey = "1.6"
+
+[dev-dependencies]
+similar-asserts = "1.4"
+datatest-stable = "0.1"
+

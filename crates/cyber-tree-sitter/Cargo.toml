@@ -1,0 +1,16 @@
+[package]
+name = "cyber-tree-sitter"
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+
+[lib]
+doctest = false
+
+[dependencies]
+tree-sitter = "0.20.9"
+tree-sitter-cyber = { path = "../../../tree-sitter-cyber/" }
+
+[dev-dependencies]
+datatest-stable = "0.1"
+
