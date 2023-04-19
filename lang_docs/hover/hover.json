@@ -205,7 +205,7 @@
           "type": "keyword",
           "node_type": ["@function"],
           "description": "The func keyword is used to define a new function. Static functions are declared with the func keyword and must have a name.",
-          "example": "func MyFunction(a: number, b: number) -> number:\n    return a + b"
+          "example": "func MyFunction(a: number, b: number) -> number:\n    return a + b\n"
         },
         {
           "keyword": "return",

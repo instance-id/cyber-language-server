@@ -423,10 +423,25 @@ impl LanguageServer for Backend {
         }
 
         match output {
-          Some(result) => Ok(Some(Hover {
-            contents: HoverContents::Scalar(MarkedString::String(result.description)),
-            range: Some(Range { start: position, end: position }),
-          })),
+          Some(result) => {
+            let hover_str = format!("
+### {} 
+<p align='right'>{}</p>
+
+---
+#### {}  
+
+```cyber
+{}
+```  ", result.keyword, result.keyword_detail_type, result.description, result.example);
+            Ok(Some(Hover {
+              contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: hover_str,
+              }),
+              range: Some(Range { start: position, end: position }),
+            }))
+          },
           None => Ok(None),
         }
       }

@@ -2,6 +2,7 @@ use cyber_tree_sitter as tree_sitter;
 use tower_lsp::lsp_types::{
     SemanticToken, SemanticTokenType, SemanticTokens, SemanticTokensLegend,
 };
+use cyber_highlight;
 
 pub fn legend() -> SemanticTokensLegend {
     SemanticTokensLegend {

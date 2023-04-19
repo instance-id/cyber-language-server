@@ -55,9 +55,11 @@ pub enum TokenType {
     KeywordReturn,
     KeywordConditional,
     Symbol,
+    Namespace,
     Type,
     TypeVariable,
     EnumMember,
+    TopLevelName,
     Variable,
     Operator,
     String,
@@ -78,9 +80,11 @@ impl TokenType {
             5 => Some(Self::KeywordReturn),
             6 => Some(Self::KeywordConditional),
             7 => Some(Self::Symbol),
+            8 => Some(Self::Namespace),
             9 | 10 => Some(Self::Type),
             11 => Some(Self::TypeVariable),
             12 => Some(Self::EnumMember),
+            13 => Some(Self::TopLevelName),
             14 => Some(Self::Variable),
             15 | 16 | 17 => Some(Self::Operator),
             18 => Some(Self::String),
@@ -105,7 +109,7 @@ pub fn get_tokens<'a>(source: &str, tree: &'a tree_sitter::Tree, query: &Query) 
         for capture in query_match.captures {
             let node = capture.node;
             if node.start_byte() == node.end_byte() {
-                // Ignore empty nodes
+                // Ignore empty nodes!
                 continue;
             }
             if let Some(token_type) = TokenType::from_pattern_index(query_match.pattern_index) {
