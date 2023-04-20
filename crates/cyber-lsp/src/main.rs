@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 
 use clap::{arg, Arg, Command};
+use cyber_tree_sitter::Tree;
 use dashmap::DashMap;
 use documents::TextDocuments;
-use ropey::Rope;
 use lsp_types::Url;
 use tower_lsp::{LspService, Server};
 use tokio::sync::Mutex;
@@ -27,19 +27,19 @@ mod semantic_tokens;
 
 #[derive(Debug)]
 struct Backend {
+  lsp_client: String,
   client: tower_lsp::Client,
-  doc_map: DashMap<Url, Rope>,
   documents: TextDocuments,
   workspace_map: DashMap<Url, String>,
-  pub docs: DashMap<lsp_types::Url, FullTextDocument>,
-  buffers: Arc<Mutex<HashMap<Url, String>>>
+  parse_tree:Mutex<HashMap<Url, Tree>>,
+  docs: Arc<Mutex<HashMap<lsp_types::Url, FullTextDocument>>>,
 }
 
 #[derive(Debug)]
 struct State {
     client_monitor: bool,
-    shutdown: tokio::sync::broadcast::Sender<()>,
     warned_needs_restart: bool,
+    shutdown: tokio::sync::broadcast::Sender<()>,
 }
 
 impl State {
@@ -67,6 +67,10 @@ async fn main() {
     .arg_required_else_help(true)
     .author("instance.id")
     .arg(
+      arg!(client: -c --client <CLIENT> "The client to use")
+      .default_value("nvim").default_missing_value("nvim")
+      .value_parser(["vscode", "nvim"]))
+    .arg(
       arg!(--level <Name>)
       .short('l').num_args(0..=1)
       .help("The log level to use").require_equals(true)
@@ -83,11 +87,9 @@ async fn main() {
     .get_matches();
 
 
-    let log_file_dir = std::env::current_exe().unwrap().with_file_name("");
-    let file_appender = RollingFileAppender::new(Rotation::NEVER, log_file_dir, "cyberls.log");
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
-
-  let docs = &mut DOCUMENTS.write().unwrap();
+  let log_file_dir = std::env::current_exe().unwrap().with_file_name("");
+  let file_appender = RollingFileAppender::new(Rotation::NEVER, log_file_dir, "cyberls.log");
+  let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
   // --| Sdtio Communication -----
   match matches.subcommand() {
@@ -98,14 +100,20 @@ async fn main() {
         .with_writer(non_blocking)
         .init();
 
+      let lsp_client = matches 
+        .get_one::<String>("client")
+        .expect("error");
+
+      info!("Client Connected: {}", &lsp_client);
+
       let (stdin, stdout) = (tokio::io::stdin(), tokio::io::stdout());
       let (service, socket) = LspService::new(|client| Backend {
         client, 
-        doc_map: DashMap::new(), 
-        docs: DashMap::new(),
-        documents: TextDocuments::new(),
         workspace_map: DashMap::new(),  
-        buffers: Arc::new(Mutex::new(HashMap::new())),
+        lsp_client: lsp_client.clone(),
+        documents: TextDocuments::new(),
+        parse_tree: Mutex::new(HashMap::new()),
+        docs: Arc::new(Mutex::new(HashMap::new())),
       });
 
       info!("Starting server");
@@ -113,16 +121,18 @@ async fn main() {
     }
 
     // --| TCP Communication -----
-    Some(("tcp", sync_matches)) => {
+    Some(("tcp", arguments)) => {
       #[cfg(feature = "runtime-agnostic")]
       use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
       tracing_subscriber::fmt().init();
 
+      let lsp_client = arguments.get_one::<String>("CLIENT").expect("error"); 
+
       let stream = {
         // --| Use port if provided
-        if sync_matches.contains_id("port") {
-          let port = sync_matches.get_one::<String>("port").expect("error");
+        if arguments.contains_id("port") {
+          let port = arguments.get_one::<String>("port").expect("error");
           let port: u16 = port.parse().unwrap();
 
           let listener = TcpListener::bind(
@@ -151,11 +161,11 @@ async fn main() {
 
       let (service, socket) = LspService::new(|client| Backend {
         client, 
-        doc_map: DashMap::new(), 
-        docs: docs.clone(),
-        documents: TextDocuments::new(),
         workspace_map: DashMap::new(),  
-        buffers: Arc::new(Mutex::new(HashMap::new())),
+        lsp_client: lsp_client.clone(), 
+        documents: TextDocuments::new(),
+        parse_tree: Mutex::new(HashMap::new()),
+        docs: Arc::new(Mutex::new(HashMap::new())),
       });
 
       Server::new(read, write, socket).serve(service).await;

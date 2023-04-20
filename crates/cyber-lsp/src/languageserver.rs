@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use cyber_tree_sitter::Node;
+use cyber_tree_sitter::Tree;
 use serde_json::Value;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
@@ -13,6 +15,12 @@ use crate::diagnostics::error_check;
 use crate::utils::treehelper;
 
 impl Backend {
+
+  pub async fn get_urls(&self) -> Vec<Url> {
+   let docs = self.docs.lock().await;
+   docs.iter().map(|(url, _)| url.clone()).collect::<Vec<Url>>()
+  }
+
   // --| Check and publish the initial diagnostics.
   async fn publish_diagnostics(&self, uri: Url, context: String) {
     if context.is_empty() { return; }
@@ -20,7 +28,7 @@ impl Backend {
     let diag_results = error_check(Path::new(uri.path()), &context);
     
     if let Some(diag) = diag_results {
-      let mut pusheddiagnoses = vec![];
+      let mut diagnostic_items = vec![];
 
       for (start, end, message, severity) in diag.inner {
         let pointx = lsp_types::Position::new(start.row as u32, start.column as u32);
@@ -32,73 +40,25 @@ impl Backend {
           source: None, message, related_information: None, tags: None, data: None,
         };
 
-        pusheddiagnoses.push(diagnose);
+        diagnostic_items.push(diagnose);
       }
-      self.client.publish_diagnostics(uri, pusheddiagnoses, Some(1)).await;
+      self.client.publish_diagnostics(uri, diagnostic_items, Some(1)).await;
     } else {
       self.client.publish_diagnostics(uri, vec![], None).await;
     }
-
-    // let mut parser = cyber_tree_sitter::try_init_parser().expect("Parser failed to load");
-    // let ts_tree = parser.parse(&context, None);
-    // if let Some(tree) = ts_tree {
-    //   let grammer_error = checkerror(Path::new(uri.path()), &context, tree.root_node());
-    //
-    //   if let Some(diagnoses) = grammer_error {
-    //     let mut pusheddiagnoses = vec![];
-    //  
-    //     for (start, end, message, severity) in diagnoses.inner {
-    //       let pointx = lsp_types::Position::new(start.row as u32, start.column as u32);
-    //       let pointy = lsp_types::Position::new(end.row as u32, end.column as u32);
-    //       let range = Range { start: pointx, end: pointy };
-    //
-    //       let diagnose = Diagnostic { 
-    //         range, severity, code: None, code_description: None,
-    //         source: None, message, related_information: None, tags: None, data: None,
-    //       };
-    //
-    //       pusheddiagnoses.push(diagnose);
-    //     }
-    //     self.client.publish_diagnostics(uri, pusheddiagnoses, Some(1)).await;
-    //   } else {
-    //     self.client.publish_diagnostics(uri, vec![], None).await;
-    //   }
-    // }
   }
 
   // --| Publishes the updated diagnostics.
   async fn update_diagnostics(&self) {
-    // info!("Update Diagnostics");
-    // let docs = &self.docs; 
-    //
-    // let doc_iter = docs.iter();
-    // docs.try_get();
-    //
-    //
-    // for (uri, doc) in doc_iter {
-    //   let context = doc.get_text();
-    //   self.publish_diagnostics(uri.clone(), context).await;
-    // }
-    //
-    // info!("Creating Document Objects");
-    // let document = FullTextDocument::new(uri.clone(), id, version, context,);
-    //
-    // info!("Inserting Document Objects");
-    // docs.insert(document.uri.clone(), document.clone());
-    //
-    // info!("Retrieving Document Objects");
-    // let content =  document.get_text();
-    //
-    // if Some(content) == None {
-    //   info!("Failed to get document content: {:?}", uri);
-    //   self.client.log_message(MessageType::ERROR, format!("Failed to get document content: {:?}", uri)).await;
-    //   return;
-    // }
+    let urls = self.get_urls().await;
 
+    info!("Update Diagnostics");
+    let docs = &self.docs.lock().await;   
 
-    let storemap = self.buffers.lock().await;
-    for (uri, context) in storemap.iter() {
-      self.publish_diagnostics(uri.clone(), context.to_string()).await;
+    for url in urls {
+      let doc = docs.get(&url).unwrap();
+      let context = doc.get_text();
+      self.publish_diagnostics(url.clone(), context.to_string()).await;
     }
   }
 }
@@ -112,11 +72,12 @@ struct TextDocumentItem {
 
 impl Backend {
   async fn on_change(&self, input: TextDocumentItem) {
-    // let _parser = cyber_tree_sitter::try_init_parser().expect("Parser failed to load");
-    let docs = &mut self.docs.get_mut(&input.uri).unwrap();
+    let _parser = cyber_tree_sitter::try_init_parser().expect("Parser failed to load");
+
+    let docs = &mut self.docs.lock().await;
     info!("Retrieved document data");
 
-    docs.update(input.changes, input.version.into());
+    docs.get_mut(&input.uri).unwrap().update(input.changes, input.version.into());
     info!("Updated document data");
 
     self.client.log_message(MessageType::INFO, "file changed!").await;
@@ -149,7 +110,6 @@ impl LanguageServer for Backend {
 
     if let Some(folders) = params.workspace_folders {
       folders.into_iter().for_each(|folder| {
-
         let uri_str = folder.uri.to_string(); 
         self.workspace_map.insert(folder.uri, folder.name.to_string());
         info!("Workspace: {} {}", uri_str, &folder.name);
@@ -245,13 +205,15 @@ impl LanguageServer for Backend {
   // --|-------------------------------
   async fn did_open(&self, params: DidOpenTextDocumentParams) {
     info!("File Opened: {:?}", params.text_document.uri);
-    let docs = &self.docs; 
+    let docs = &mut self.docs.lock().await; 
+    
+    let parse_tree = &mut self.parse_tree.lock().await;
+    let mut parser = cyber_tree_sitter::try_init_parser().expect("Parser failed to load");
 
     let uri = &params.text_document.uri;
     let context = params.text_document.text;
     let id = params.text_document.language_id;
     let version: i64 = params.text_document.version.into();
-
 
     info!("Creating Document Objects");
     let document = FullTextDocument::new(uri.clone(), id, version, context,);
@@ -268,23 +230,25 @@ impl LanguageServer for Backend {
       return;
     }
     else{
+      let tree = &parser.parse(content, None);
+      if let Some(tree) = tree {
+        info!("Inserting Parse Tree");
+        parse_tree.insert(uri.clone(), tree.clone());
+        info!("{}", TreeWrapper(tree.clone()));
+      }
+
       info!("Begin Publishing Diagnostics: {:?}", uri.clone());
       self.publish_diagnostics(uri.clone(), content.to_string()).await;
 
       info!("Diagnostic Published: {:?}", uri.clone());
       self.client.log_message(MessageType::INFO, format!("file opened: {:?}", uri)).await;
     }
-
-    // let mut docs = self.documents.clone();
-    // docs.listen(&method, &param);
-    // let mut storemap = self.buffers.lock().await;
-    // storemap.entry(uri.clone()).or_insert(context.clone());
   }
 
 
   // --| File Change ------------------
   // --|-------------------------------
-  async fn did_change(&self,mut params: DidChangeTextDocumentParams) {
+  async fn did_change(&self, mut params: DidChangeTextDocumentParams) {
     info!("Did Change");
 
     self.on_change(TextDocumentItem {
@@ -349,8 +313,11 @@ impl LanguageServer for Backend {
   // --| File Close -------------------
   // --|-------------------------------
   async fn did_close(&self, params: DidCloseTextDocumentParams) {
-    self.docs.remove(&params.text_document.uri).unwrap();
+    let docs = &mut self.docs.lock().await;
+
+    docs.remove(&params.text_document.uri).unwrap();
     info!("File Closed: {:?}", params.text_document.uri);
+    
     self.client.log_message(MessageType::INFO, "file closed!").await;
   }
 
@@ -365,7 +332,9 @@ impl LanguageServer for Backend {
     if params.context.is_some() {
       let uri = params.text_document_position.text_document.uri;
 
-      let doc_tmp = self.docs.get_mut(&uri).unwrap();
+      let tmp = &mut self.docs.lock().await;
+      let doc_tmp = tmp.get_mut(&uri).unwrap();
+
       let doc_data = doc_tmp.get_text();
       if doc_data.len() == 0 { info!("Completion: No document found"); return Ok(None); }
 
@@ -387,7 +356,9 @@ impl LanguageServer for Backend {
     let position = params.text_document_position_params.position;
     let uri = params.text_document_position_params.text_document.uri;
 
-    let doc_tmp = self.docs.get_mut(&uri).unwrap();
+    let tmp = &mut self.docs.lock().await;
+    let doc_tmp = tmp.get_mut(&uri).unwrap();
+
     let doc_data = doc_tmp.get_text();
 
     self.client.log_message(MessageType::INFO, "Hovered!").await;
@@ -406,7 +377,6 @@ impl LanguageServer for Backend {
 
     match Some(doc_data) {
       Some(context) => {
-
         let mut parser = cyber_tree_sitter::try_init_parser().expect("Parser failed to load");
         info!("Hover: Parser Loaded");
 
@@ -424,7 +394,9 @@ impl LanguageServer for Backend {
 
         match output {
           Some(result) => {
-            let hover_str = format!("
+            let hover_str: String;
+            if self.lsp_client == "vscode" {
+              hover_str  = format!("
 ### {} 
 <p align='right'>{}</p>
 
@@ -434,6 +406,19 @@ impl LanguageServer for Backend {
 ```cyber
 {}
 ```  ", result.keyword, result.keyword_detail_type, result.description, result.example);
+              } else {
+                hover_str = format!("
+```cyber
+{}
+```
+---
+{}
+
+```cyber
+{}
+```  ", result.keyword,  result.description, result.example);
+                }
+
             Ok(Some(Hover {
               contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
@@ -449,18 +434,20 @@ impl LanguageServer for Backend {
     }
   }
 
-  async fn shutdown(&self) -> Result<()> {
-    Ok(())
-  }
-
+  // --| Workspace Change -------------
+  // --|-------------------------------
   async fn did_change_workspace_folders(&self, _: DidChangeWorkspaceFoldersParams) {
     self.client.log_message(MessageType::INFO, "workspace folders changed!").await;
   }
 
+  // --| Configuration Change ---------
+  // --|-------------------------------
   async fn did_change_configuration(&self, _: DidChangeConfigurationParams) {
     self.client.log_message(MessageType::INFO, "configuration changed!").await;
   }
 
+  // --| Changed Watched Files --------
+  // --|-------------------------------
   async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
     info!("Watched Files Changed");
 
@@ -470,11 +457,56 @@ impl LanguageServer for Backend {
       if let FileChangeType::DELETED = change.typ {
         // filewatcher::clear_error_packages();
       } else {
-        let path = change.uri.path();
+        let _path = change.uri.path();
         // filewatcher::refresh_error_packages(path);
       }
     }
+
     self.update_diagnostics().await;
     self.client.log_message(MessageType::INFO, "watched files have changed!").await;
   }
+
+  // --| Shutdown ---------------------
+  // --|-------------------------------
+  async fn shutdown(&self) -> Result<()> {
+    Ok(())
+  }
+}
+
+
+pub struct TreeWrapper(pub Tree);
+impl std::fmt::Display for TreeWrapper {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        pretty_display(f, self.0.root_node())?;
+        Ok(())
+    }
+}
+
+pub fn pretty_display(f: &mut std::fmt::Formatter<'_>, root: Node) -> std::fmt::Result {
+    let mut stack = Vec::new();
+    if !root.is_named() {
+        return Ok(());
+    }
+    stack.push((root, 0));
+    while let Some((node, level)) = stack.pop() {
+        let kind = node.kind();
+        let start = node.start_position();
+        let end = node.end_position();
+        info!("{}{} [{}, {}] - [{}, {}] ", " ".repeat(level * 2), kind, start.row, start.column, end.row, end.column);
+        writeln!(
+            f,
+            "{}{} [{}, {}] - [{}, {}] ",
+            " ".repeat(level * 2),
+            kind,
+            start.row,
+            start.column,
+            end.row,
+            end.column
+        )?;
+        for i in (0..node.named_child_count()).rev() {
+            let child = node.named_child(i).unwrap();
+            stack.push((child, level + 1));
+        }
+    }
+    Ok(())
 }
