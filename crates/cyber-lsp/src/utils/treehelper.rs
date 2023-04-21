@@ -1,14 +1,30 @@
 use std::collections::HashMap;
 
+use cyber_tree_sitter::InputEdit;
+use cyber_tree_sitter::Tree;
 use lsp_types::Range;
 use lsp_types::Position;
+use lsp_types::TextDocumentContentChangeEvent;
 use once_cell::sync::Lazy;
 use tracing::error;
 use tracing::info;
 use tree_sitter::{Node, Point};
 
 use crate::datatypes::*;
+use crate::documents::FullTextDocument;
 use super::doc_loader::LANGUAGE_DOCS;
+
+pub fn generate_lsp_range(
+    start_row: u32,
+    start_column: u32,
+    end_row: u32,
+    end_column: u32,
+) -> Range {
+    Range::new(
+        Position::new(start_row, start_column),
+        Position::new(end_row, end_column),
+    )
+}
 
 /// Converts [tree_sitter] Point to [lsp_types] Position
 /// treesitter to lsp_types
@@ -97,6 +113,41 @@ pub fn get_position_range(location: Position, root: Node) -> Option<Range> {
       }
   }
   None
+}
+
+pub fn get_tree_sitter_edit_from_change(
+    change: &TextDocumentContentChangeEvent,
+    document: &mut FullTextDocument,
+    version: i64,
+) -> Option<InputEdit> {
+    if change.range.is_none() || change.range_length.is_none() {
+        return None;
+    }
+
+    let range = change.range.unwrap();
+    let start = range.start;
+    let end = range.end;
+    let start_char = document.rope.line_to_char(start.line as usize) + start.character as usize;
+    let old_end_char = document.rope.line_to_char(end.line as usize) + end.character as usize;
+
+    let start_byte = document.rope.char_to_byte(start_char);
+    let old_end_byte = document.rope.char_to_byte(old_end_char);
+
+    document.update(vec![change.clone()], version);
+    let new_end_char = start_char + change.text.chars().count();
+    let new_end_byte = document.rope.char_to_byte(new_end_char);
+
+    let new_end_line = document.rope.char_to_line(new_end_char);
+    let new_end_line_first_character = document.rope.line_to_char(new_end_line);
+    let new_end_character = new_end_byte - new_end_line_first_character;
+    Some(InputEdit {
+        start_byte,
+        old_end_byte,
+        new_end_byte,
+        start_position: Point::new(start.line as usize, start.character as usize),
+        old_end_position: Point::new(end.line as usize, end.character as usize),
+        new_end_position: Point::new(new_end_line, new_end_character),
+    })
 }
 
 // --| Language Definitions Storage ---
@@ -201,3 +252,39 @@ pub fn get_pos_type( location: Position, root: Node, source: &str, inputtype: Po
   PositionType::NotFind
 }
 
+pub struct TreeWrapper(pub Tree);
+impl std::fmt::Display for TreeWrapper {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        pretty_display(f, self.0.root_node())?;
+        Ok(())
+    }
+}
+
+pub fn pretty_display(f: &mut std::fmt::Formatter<'_>, root: Node) -> std::fmt::Result {
+    let mut stack = Vec::new();
+    if !root.is_named() {
+        return Ok(());
+    }
+    stack.push((root, 0));
+    while let Some((node, level)) = stack.pop() {
+        let kind = node.kind();
+        let start = node.start_position();
+        let end = node.end_position();
+        info!("{}{} [{}, {}] - [{}, {}] ", " ".repeat(level * 2), kind, start.row, start.column, end.row, end.column);
+        writeln!(
+            f,
+            "{}{} [{}, {}] - [{}, {}] ",
+            " ".repeat(level * 2),
+            kind,
+            start.row,
+            start.column,
+            end.row,
+            end.column
+        )?;
+        for i in (0..node.named_child_count()).rev() {
+            let child = node.named_child(i).unwrap();
+            stack.push((child, level + 1));
+        }
+    }
+    Ok(())
+}

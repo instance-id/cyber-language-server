@@ -3,9 +3,8 @@ use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 
 use clap::{arg, Arg, Command};
-use cyber_tree_sitter::Tree;
+use cyber_tree_sitter::{Tree, Parser};
 use dashmap::DashMap;
-use documents::TextDocuments;
 use lsp_types::Url;
 use tower_lsp::{LspService, Server};
 use tokio::sync::Mutex;
@@ -13,6 +12,7 @@ use tokio::net::TcpListener;
 
 use tracing::info;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
+use tracing_subscriber::filter;
 
 use crate::documents::FullTextDocument;
 
@@ -24,28 +24,28 @@ mod languageserver;
 mod utils;
 mod documents;
 mod semantic_tokens;
+mod handlers;
 
-#[derive(Debug)]
 struct Backend {
-  lsp_client: String,
-  client: tower_lsp::Client,
-  documents: TextDocuments,
-  workspace_map: DashMap<Url, String>,
-  parse_tree:Mutex<HashMap<Url, Tree>>,
-  docs: Arc<Mutex<HashMap<lsp_types::Url, FullTextDocument>>>,
+  pub(crate) lsp_client: String,
+  pub(crate) parser: Mutex<Parser>,
+  pub(crate) client: tower_lsp::Client,
+  pub(crate) parse_tree:Mutex<HashMap<Url, Tree>>,
+  pub(crate) docs: Arc<Mutex<HashMap<lsp_types::Url, FullTextDocument>>>,
+  pub workspace_map: DashMap<Url, String>,
+  // pub(crate) documents: TextDocuments,
 }
 
-#[derive(Debug)]
 struct State {
-    client_monitor: bool,
-    warned_needs_restart: bool,
-    shutdown: tokio::sync::broadcast::Sender<()>,
+  client_monitor: bool,
+  _warned_needs_restart: bool,
+  _shutdown: tokio::sync::broadcast::Sender<()>,
 }
 
 impl State {
   pub fn new() -> Self {
-    let (shutdown, _) = tokio::sync::broadcast::channel(1);
-    Self { client_monitor: false, shutdown, warned_needs_restart: false}}
+    let (_shutdown, _) = tokio::sync::broadcast::channel(1);
+    Self { client_monitor: false, _shutdown, _warned_needs_restart: false}}
 }
 
 #[macro_use]
@@ -66,44 +66,52 @@ async fn main() {
     .subcommand_required(true)
     .arg_required_else_help(true)
     .author("instance.id")
-    .arg(
+
+    .arg( // --| Lsp connection client ----------
       arg!(client: -c --client <CLIENT> "The client to use")
-      .default_value("nvim").default_missing_value("nvim")
+      .default_value("vscode").default_missing_value("nvim")
       .value_parser(["vscode", "nvim"]))
-    .arg(
-      arg!(--level <Name>)
-      .short('l').num_args(0..=1)
-      .help("The log level to use").require_equals(true)
+
+    .arg( // --| Log level ----------------------
+      arg!(level: -l --level <Name> "The log level to use")
       .default_value("info").default_missing_value("info")
       .value_parser(["error", "warn", "info", "debug"]))
-    // --| Sdtio Communication ---
-    .subcommand(
+    
+    .subcommand( // --| Sdtio Communication -----
       Command::new("stdio").long_flag("stdio").about("communicate via stdio"))
-
-    // --| TCP Communication -----
-    .subcommand(
+    
+    .subcommand( // --| TCP Communication -------
       Command::new("tcp").long_flag("tcp").about("run with tcp").arg(
         Arg::new("port").long("port").short('P').help("listen to port")))
     .get_matches();
 
-
+  let log_level = matches.get_one::<String>("level").expect("error");
   let log_file_dir = std::env::current_exe().unwrap().with_file_name("");
   let file_appender = RollingFileAppender::new(Rotation::NEVER, log_file_dir, "cyberls.log");
   let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
+  let filter = match log_level.as_str() {
+    "info" => filter::LevelFilter::INFO,
+    "warn" => filter::LevelFilter::WARN,
+    "error" => filter::LevelFilter::ERROR,
+    "debug" => filter::LevelFilter::DEBUG,
+    _ => filter::LevelFilter::INFO,
+  };
+
+  tracing_subscriber::fmt()
+    .with_ansi(false)
+    .with_max_level(filter)
+    .with_line_number(true)
+    .with_writer(non_blocking)
+    .init();
+
+  info!("Log Level: {}", &log_level);
+
   // --| Sdtio Communication -----
   match matches.subcommand() {
     Some(("stdio", _)) => {
-      tracing_subscriber::fmt()
-        .with_ansi(false)
-        .with_line_number(true)
-        .with_writer(non_blocking)
-        .init();
-
-      let lsp_client = matches 
-        .get_one::<String>("client")
-        .expect("error");
-
+      
+      let lsp_client = matches.get_one::<String>("client").expect("error");
       info!("Client Connected: {}", &lsp_client);
 
       let (stdin, stdout) = (tokio::io::stdin(), tokio::io::stdout());
@@ -111,12 +119,12 @@ async fn main() {
         client, 
         workspace_map: DashMap::new(),  
         lsp_client: lsp_client.clone(),
-        documents: TextDocuments::new(),
         parse_tree: Mutex::new(HashMap::new()),
         docs: Arc::new(Mutex::new(HashMap::new())),
+        parser: Mutex::new(cyber_tree_sitter::init_parser()),
       });
 
-      info!("Starting server");
+      info!("Starting cyberls server");
       Server::new(stdin, stdout, socket).serve(service).await;
     }
 
@@ -125,9 +133,7 @@ async fn main() {
       #[cfg(feature = "runtime-agnostic")]
       use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-      tracing_subscriber::fmt().init();
-
-      let lsp_client = arguments.get_one::<String>("CLIENT").expect("error"); 
+      let lsp_client = matches.get_one::<String>("client").expect("error");
 
       let stream = {
         // --| Use port if provided
@@ -163,9 +169,9 @@ async fn main() {
         client, 
         workspace_map: DashMap::new(),  
         lsp_client: lsp_client.clone(), 
-        documents: TextDocuments::new(),
         parse_tree: Mutex::new(HashMap::new()),
         docs: Arc::new(Mutex::new(HashMap::new())),
+        parser: Mutex::new(cyber_tree_sitter::init_parser()),
       });
 
       Server::new(read, write, socket).serve(service).await;
@@ -173,3 +179,4 @@ async fn main() {
     _ => unreachable!(),
   }
 }
+

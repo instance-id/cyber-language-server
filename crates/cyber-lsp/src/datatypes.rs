@@ -1,4 +1,12 @@
+use lsp_types::{Url, TextDocumentContentChangeEvent};
 use serde_derive::{Deserialize, Serialize};
+
+pub(crate) struct TextDocumentItem {
+  pub uri: Url,
+  pub text: String,
+  pub version: i32,
+  pub changes: Vec<TextDocumentContentChangeEvent>
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LanguageDoc {
@@ -6,7 +14,7 @@ pub struct LanguageDoc {
   pub path: String,
 }
 
-pub type LanguageDefinitions = Vec<LanguageDefinition>;
+pub type _LanguageDefinitions = Vec<LanguageDefinition>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LanguageDefinition {
@@ -39,7 +47,7 @@ impl LanguageDefinition {
       .flatten()
   }
 
-  pub(crate) fn to_string(&self) -> String {
+  pub(crate) fn _to_string(&self) -> String {
     todo!()
   }
 }

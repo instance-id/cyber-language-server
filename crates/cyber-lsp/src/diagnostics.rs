@@ -10,7 +10,7 @@ pub struct ErrorInfo {
   pub inner: Vec<(tree_sitter::Point, tree_sitter::Point, String, Option<DiagnosticSeverity>)>,
 }
 
-pub fn error_check(local_path: &Path, _source: &str) -> Option<ErrorInfo> {
+pub fn check_compile_error(local_path: &Path, _source: &str) -> Option<ErrorInfo> {
   let mut diag_result = vec![];
   let path_str = local_path.to_str().unwrap();
 
@@ -39,11 +39,11 @@ pub fn error_check(local_path: &Path, _source: &str) -> Option<ErrorInfo> {
       let err_col = err_lines[2].split(":").collect::<Vec<&str>>()[2].trim().parse::<usize>().unwrap();
 
       diag_result.push((
-          tree_sitter::Point { row: err_row - 1, column: err_col }, 
-          tree_sitter::Point { row: err_row - 1, column: err_col }, 
-          err_msg.to_string(), 
-          Some(DiagnosticSeverity::ERROR),
-          ));
+        tree_sitter::Point{ row: err_row - 1, column: err_col }, 
+        tree_sitter::Point{ row: err_row - 1, column: err_col }, 
+        err_msg.to_string(), 
+        Some(DiagnosticSeverity::ERROR),
+      ));
     }
   }
 
@@ -52,21 +52,21 @@ pub fn error_check(local_path: &Path, _source: &str) -> Option<ErrorInfo> {
   Some(ErrorInfo { inner: diag_result })
 }
 
-pub fn checkerror(local_path: &Path, source: &str, input: tree_sitter::Node) -> Option<ErrorInfo> {
-  let newsource: Vec<&str> = source.lines().collect();
+pub fn check_tree_error(_local_path: &Path, source: &str, input: tree_sitter::Node) -> Option<ErrorInfo> {
+  let _source_array: Vec<&str> = source.lines().collect();
 
   if input.is_error() {
     Some(ErrorInfo {
       inner: vec![( input.start_position(), input.end_position(), "Grammar Error".to_string(), None,)],
     })
   } else {
-    let mut course = input.walk();
+    let _cursor = input.walk();
     {
-      let mut output = vec![];
+      let output = vec![];
       // --| Since I don't know what diagnostics to --
       // --| add but this is a possible example. -----
 
-      // for node in input.children(&mut course) {
+      // for node in input.children(&mut cursor) {
       //   if let Some(mut tran) = checkerror(local_path, source, node) {
       //     output.append(&mut tran.inner);
       //   }
@@ -76,7 +76,7 @@ pub fn checkerror(local_path: &Path, source: &str, input: tree_sitter::Node) -> 
       //     let ids = node.child(1).unwrap();
       //     let x = ids.start_position().column;
       //     let y = ids.end_position().column;
-      //     let name = &newsource[h][x..y];
+      //     let name = &source_array[h][x..y];
       //
       //     // --| Diagnostics processing here: -----
       //     if name.to_lowercase() == "something" && node.child_count() >= 5 {
@@ -87,8 +87,8 @@ pub fn checkerror(local_path: &Path, source: &str, input: tree_sitter::Node) -> 
       //         let x = child.start_position().column;
       //         let y = child.end_position().column;
       //
-      //         if h < newsource.len() && y > x && y < newsource[h].len() {
-      //           let name = &newsource[h][x..y];
+      //         if h < source_array.len() && y > x && y < newsource[h].len() {
+      //           let name = &source_array[h][x..y];
       //
       //           if errors.contains(&name.to_string()) {
       //             output.push((
@@ -115,7 +115,7 @@ pub fn checkerror(local_path: &Path, source: &str, input: tree_sitter::Node) -> 
   }
 }
 
-fn cyber_try_exists(input: &PathBuf) -> std::io::Result<bool> {
+fn _cyber_try_exists(input: &PathBuf) -> std::io::Result<bool> {
   match std::fs::metadata(input) {
     Ok(_) => Ok(true),
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
@@ -123,7 +123,7 @@ fn cyber_try_exists(input: &PathBuf) -> std::io::Result<bool> {
   }
 }
 
-fn scanner_include_error(path: &PathBuf) -> bool {
+fn _scanner_include_error(path: &PathBuf) -> bool {
   match fs::read_to_string(path) {
     Ok(content) => {
       let mut parser = cyber_tree_sitter::try_init_parser().expect("Parser failed to load");
