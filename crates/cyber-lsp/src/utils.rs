@@ -1,8 +1,9 @@
-mod docloader;
-pub mod treehelper;
 use std::process::Command as cmd;
-pub use docloader::*;
 use serde::{Deserialize, Serialize};
+
+mod doc_loader;
+pub use doc_loader::*;
+pub mod treehelper;
 
 #[derive(Deserialize, Debug, Serialize, Clone)]
 pub enum FileType {

@@ -1,5 +1,6 @@
 use lsp_types::{Url, TextDocumentContentChangeEvent};
 use serde_derive::{Deserialize, Serialize};
+use tracing_subscriber::filter;
 
 pub(crate) struct TextDocumentItem {
   pub uri: Url,
@@ -49,5 +50,25 @@ impl LanguageDefinition {
 
   pub(crate) fn _to_string(&self) -> String {
     todo!()
+  }
+}
+
+// --| Debug Structures ----------
+// --|----------------------------
+#[derive(Debug)]
+pub struct LogData {
+  pub(crate) log_level: filter::LevelFilter,
+  pub(crate) verbose: bool,
+}
+
+impl Default for LogData {
+fn default() -> Self {
+    LogData { log_level: filter::LevelFilter::WARN, verbose: false }
+  }
+}
+
+impl LogData {
+  pub fn new(log_level: filter::LevelFilter, verbose: bool) -> Self {
+    Self { log_level, verbose }
   }
 }

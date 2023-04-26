@@ -5,7 +5,6 @@ use tower_lsp::LanguageServer;
 use tracing::info;
 
 use crate::Backend;
-use crate::datatypes::TextDocumentItem;
 
 // --| Language Server Protocol (LSP) implementation
 #[tower_lsp::async_trait]

@@ -1,23 +1,24 @@
 use std::path::Path;
 use std::time::Instant;
 
+use cyber_tree_sitter::Tree;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tracing::debug;
+use tracing::error;
 use tracing::info;
+use tracing::metadata::LevelFilter;
 
 use crate::Backend;
 use crate::State;
 
 use crate::completions;
-use crate::datatypes::TextDocumentItem;
-use crate::diagnostics::check_compile_error;
-use crate::diagnostics::check_tree_error;
+use crate::diagnostics::ErrorInfo;
 use crate::documents::FullTextDocument;
-use crate::utils::treehelper;
-use crate::utils::treehelper::TreeWrapper;
-use crate::utils::treehelper::generate_lsp_range;
-use crate::utils::treehelper::get_tree_sitter_edit_from_change;
+use crate::diagnostics::{check_compile_error, check_tree_error};
+use crate::utils::treehelper::get_parser_errors;
+use crate::utils::treehelper::position_to_point;
+use crate::utils::treehelper::{ TreeWrapper, get_range, get_tree_edits, get_from_position };
 
 // --| Backend Implementation ---------
 // --|---------------------------------
@@ -32,6 +33,7 @@ impl Backend{
   // --|-----------------------------------------
   // --| Initialize handler -----------
   pub async fn on_initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+    let start = Instant::now();
     let capabilities = params.capabilities;
     let mut state = State::new();
 
@@ -70,6 +72,7 @@ impl Backend{
     let registrations = vec![registration];
     let _ = self.client.register_capability(registrations).await;
 
+    debug!("Initialize: {:?}", start.elapsed().as_secs_f64());
     Ok(InitializeResult {
       server_info: None,
 
@@ -79,7 +82,7 @@ impl Backend{
             open_close: Some(true),
             will_save: Some(false),
             will_save_wait_until: Some(false),
-            change: Some(TextDocumentSyncKind::FULL),
+            change: Some(TextDocumentSyncKind::INCREMENTAL),
             save: Some(lsp_types::TextDocumentSyncSaveOptions::SaveOptions(SaveOptions {
               include_text: Some(true),
             })),
@@ -117,20 +120,8 @@ impl Backend{
   // --| Diagnostics ----------------------------
   // --|-----------------------------------------
   // --| Publish Diagnostics ----------
-  pub async fn publish_diagnostics(&self, uri: Url, context: String) {
-    // if context.is_empty() { return; }
-
-    // let current_tree = self.parse_tree.lock().await;
-    // let tree = current_tree.get(&uri).unwrap();
-
-    // let mut parser = self.parser.lock().await; 
-    // let _new_tree = parser.parse(&context, Some(tree)).unwrap();
-
-    let uri_path = Path::new(uri.path());
-    let diag_results = check_compile_error(&uri_path, &context);
-    // let _tree_results = check_tree_error(&uri_path, &context, tree.root_node());
-
-    if let Some(diag) = diag_results {
+  pub async fn publish_diagnostics(&self, uri: Url, errors: Option<ErrorInfo>) {
+    if let Some(diag) = errors {
       let mut diagnostic_items = vec![];
 
       for (start, end, message, severity) in diag.inner {
@@ -145,23 +136,61 @@ impl Backend{
 
         diagnostic_items.push(diagnose);
       }
+
+      debug!("Publish Diagnostics");
       self.client.publish_diagnostics(uri, diagnostic_items, Some(1)).await;
     } else {
       self.client.publish_diagnostics(uri, vec![], None).await;
     }
   }
 
+  pub async fn obtain_basic_diagnostics(&self, uri: Url, context: String, tree: Tree) {
+    let start = Instant::now();
+    let errors = get_parser_errors(&context, Some(tree.clone()));
+
+    let mut err_info: ErrorInfo = ErrorInfo { inner: vec![], };
+
+    if errors.len() > 0 {
+      for error in errors.iter() {
+        err_info.inner.push((
+            position_to_point(error.start), 
+            position_to_point(error.end), 
+            "Syntax Error".to_string(), 
+            Some(DiagnosticSeverity::ERROR)
+           ));
+      } 
+    }
+
+    debug!("Obtain Diagnostics: {:?}", start.elapsed().as_secs_f64());
+    self.publish_diagnostics(uri.clone(), Some(err_info)).await;
+  }
+
+  pub async fn obtain_full_diagnostics(&self, uri: Url, context: String) {
+    let start = Instant::now();
+    let uri_path = Path::new(uri.path());
+    let diag_results = check_compile_error(&uri_path, &context);
+    // let _tree_results = check_tree_error(&uri_path, &context, tree.root_node());
+
+    // let tree = self.parse_tree.lock().await.get(&uri).unwrap().clone();
+    // let _tree_results = check_tree_error(&uri_path, &context, tree.root_node());
+
+    self.publish_diagnostics(uri.clone(), diag_results).await;
+
+    debug!("Obtain Diagnostics: {:?}", start.elapsed().as_secs_f64());
+  }
+
+
   // --| Updated diagnostics ----------
   pub async fn update_diagnostics(&self) {
     let urls = self.get_urls().await;
 
-    info!("Update Diagnostics");
+    debug!("Update Diagnostics");
     let docs = &self.docs.lock().await;   
 
     for url in urls {
       let doc = docs.get(&url).unwrap();
-      let context = doc.get_text();
-      self.publish_diagnostics(url.clone(), context.to_string()).await;
+      let context = doc.get_content();
+      self.obtain_full_diagnostics(url.clone(), context.to_string()).await;
     }
   }
 
@@ -169,50 +198,33 @@ impl Backend{
   // --|-----------------------------------------
   // --| did_open handler -------------
   pub async fn on_open(&self, params: DidOpenTextDocumentParams) {
-    info!("File Opened: {:?}", params.text_document.uri);
+    let start = Instant::now();
+
+    // info!("File Opened: {:?}", params.text_document.uri);
     let docs = &mut self.docs.lock().await; 
 
     let mut parser = self.parser.lock().await;
     let parse_tree = &mut self.parse_tree.lock().await;
 
-    let uri = &params.text_document.uri;
-    let context = params.text_document.text;
-    let id = params.text_document.language_id;
-    let version: i64 = params.text_document.version.into();
-
-    info!("Creating Document Objects");
-    let document = FullTextDocument::new(uri.clone(), id, version, context,);
-
-    info!("Inserting Document Objects");
+    let document = FullTextDocument::from_params(&params, &mut parser);
     docs.insert(document.uri.clone(), document.clone());
+    if let Some(tree) = document.tree {
+      parse_tree.insert(document.uri.clone(), tree.clone());
+      debug!("{}", TreeWrapper(tree));
+    } 
+      // debug!("Begin Publishing Diagnostics: {:?}", uri.clone());
+      // self.publish_diagnostics(uri.clone(), content.to_string()).await;
 
-    info!("Retrieving Document Objects");
-    let content =  document.get_text();
-
-    if Some(content) == None {
-      info!("Failed to get document content: {:?}", uri);
-      self.client.log_message(MessageType::ERROR, format!("Failed to get document content: {:?}", uri)).await;
-      return;
-    }
-    else{
-      let tree = &parser.parse(content, None);
-      if let Some(tree) = tree {
-        info!("Inserting Parse Tree");
-        parse_tree.insert(uri.clone(), tree.clone());
-        info!("{}", TreeWrapper(tree.clone()));
-      }
-
-      info!("Begin Publishing Diagnostics: {:?}", uri.clone());
-      self.publish_diagnostics(uri.clone(), content.to_string()).await;
-
-      info!("Diagnostic Published: {:?}", uri.clone());
-      self.client.log_message(MessageType::INFO, format!("file opened: {:?}", uri)).await;
-    }
+      // debug!("Diagnostic Published: {:?}", uri.clone());
+    debug!("File Opened: {}ms", start.elapsed().as_secs_f64());
+    self.client.log_message(MessageType::INFO, format!("file opened: {:?}", document.uri)).await;
+    // }
   }
 
   // --| onChange event handler -------
   pub async fn on_change(&self, params: DidChangeTextDocumentParams) {
     if params.content_changes.is_empty() { return; }
+    let start = Instant::now();
 
     if let Some(document) = self.docs.lock().await.get_mut(&params.text_document.uri) {
       let mut parser = self.parser.lock().await;
@@ -220,7 +232,7 @@ impl Backend{
       let changes: Vec<TextDocumentContentChangeEvent> = params.content_changes.into_iter()
         .map(|change| {
           let range = change.range.map(|range| {
-            generate_lsp_range(
+            get_range(
               range.start.line as u32, range.start.character as u32,
               range.end.line as u32, range.end.character as u32,
               )
@@ -236,20 +248,37 @@ impl Backend{
       let version = params.text_document.version;
       let tree = parse_tree.get_mut(&params.text_document.uri).unwrap();
 
-      let start = Instant::now();
       for change in changes {
-        let edits = &get_tree_sitter_edit_from_change(&change, document, version as i64);
+        let edits = &get_tree_edits(&change, document, version as i64);
         if let Some(edits) = edits { tree.edit(edits); }
       }
 
-      debug!("Incremental updating: {:?}", start.elapsed());
-      let new_tree = parser.parse(document.rope.to_string(), Some(tree)).unwrap();
-      parse_tree.insert(params.text_document.uri, new_tree);
-    }
+      let level = &self.log_data;
+      let new_tree: Tree;
+      let content = document.rope.to_string();
+      let uri = params.text_document.uri.clone();
 
-    // if doc.line_count() < 1000 {
-    //   self.publish_diagnostics(input.uri, doc.get_text().to_string()).await;
-    // }
+      if level.log_level == LevelFilter::DEBUG {
+        new_tree = parser.parse(&content, Some(tree)).unwrap();
+        let old_tree = parse_tree.insert(uri.clone(), new_tree.clone());
+
+        if level.verbose{
+          debug!("{}", TreeWrapper(old_tree.unwrap().clone()));
+          debug!("{}", TreeWrapper(new_tree.clone()));
+        }
+
+        debug!("Incremental updating: {}ms", start.elapsed().as_secs_f64());
+      } else{
+        new_tree = parser.parse(&content, Some(tree)).unwrap();
+        parse_tree.insert(uri.clone(), new_tree.clone());
+      } 
+
+      if !new_tree.root_node().has_error() {
+        self.publish_diagnostics(params.text_document.uri.clone(), None).await;
+      } else {
+        self.obtain_basic_diagnostics(uri, content , new_tree).await;
+      }
+    }
   }
 
   // --| didSave handler -------------
@@ -258,11 +287,11 @@ impl Backend{
     let uri = params.text_document.uri;
 
     if let Some(text) = content {
-      info!("Begin Publishing Diagnostics: {:?}", uri.clone());
-      self.publish_diagnostics(uri.clone(), text.to_string()).await;
+      debug!("Begin Publishing Diagnostics: {:?}", uri.clone());
+      self.obtain_full_diagnostics(uri.clone(), text.to_string()).await;
     }
     else{
-      info!("Failed to get document content: {:?}", uri);
+      error!("Failed to get document content: {:?}", uri);
       self.client.log_message(MessageType::ERROR, format!("Failed to get document content: {:?}", uri)).await;
       return;
     }
@@ -277,7 +306,7 @@ impl Backend{
     let docs = &mut self.docs.lock().await;
     let parse_tree = &mut self.parse_tree.lock().await;
 
-    info!("Removing Document: {:?}", uri);
+    debug!("Removing Document: {:?}", uri);
     docs.remove(&uri);
     parse_tree.remove(&uri);
 
@@ -293,7 +322,7 @@ impl Backend{
     self.client.log_message(MessageType::INFO, "Completion Requested").await;
     let location = params.text_document_position.position;
 
-    info!("Completion Requested: {:?}", params);
+    debug!("Completion Requested: {:?}", params);
 
     if params.context.is_some() {
       let uri = params.text_document_position.text_document.uri;
@@ -301,34 +330,34 @@ impl Backend{
       let tmp = &mut self.docs.lock().await;
       let doc_tmp = tmp.get_mut(&uri).unwrap();
 
-      let doc_data = doc_tmp.get_text();
-      if doc_data.len() == 0 { info!("Completion: No document found"); return Ok(None); }
+      let doc_data = doc_tmp.get_content();
+      if doc_data.len() == 0 { debug!("Completion: No document found"); return Ok(None); }
 
-      info!("Context is Some() requesting getcomplete({:?}, {:?}, {:?})", &self.client, location, uri.path());
+      debug!("Context is Some() requesting getcomplete({:?}, {:?}, {:?})", &self.client, location, uri.path());
 
       match Some(doc_data) {
         Some(context) => Ok(completions::get_completion(context, location, &self.client, uri.path()).await),
-        None => { info!("storemap.get was no? Context is None"); Ok(None) }
+        None => { debug!("No document? Content was None"); Ok(None) }
       }
     } else {
-      info!("storemap.get was no? Context is None");
+      debug!("No document? Content was None");
       Ok(None)
     }
   }
 
   // --| Hover Handler ----------------
-  pub async fn on_hover(&self,   params: HoverParams) -> Result<Option<Hover>> {
+  pub async fn on_hover(&self, params: HoverParams) -> Result<Option<Hover>> {
+    debug!("Hover Requested: {:?}", &params);
+
     let position = params.text_document_position_params.position;
     let uri = params.text_document_position_params.text_document.uri;
 
     let tmp = &mut self.docs.lock().await;
     let doc_tmp = tmp.get_mut(&uri).unwrap();
 
-    let doc_data = doc_tmp.get_text();
+    let doc_data = doc_tmp.get_content();
 
     self.client.log_message(MessageType::INFO, "Hovered!").await;
-
-    info!("Hover Requested");
 
     if doc_data.len() == 0 {
       info!("Hover: No document found");
@@ -343,18 +372,18 @@ impl Backend{
     match Some(doc_data) {
       Some(context) => {
         let mut parser = self.parser.lock().await; 
-        info!("Hover: Parser Loaded");
+        debug!("Hover: Parser Loaded");
 
         let ts_tree = parser.parse(context.clone(), None);
         let tree = ts_tree.unwrap();
 
-        info!("Hover: Looking up token at position: {:?} ctx: {:?} tree: {:?}", position, context, tree.root_node());
+        debug!("Hover: Looking up token at position: {:?} ctx: {:?} tree: {:?}", position, context, tree.root_node());
 
         let lsp_action = "hover".to_string();
 
-        let output = treehelper::get_from_position(position, tree.root_node(), context, lsp_action);
+        let output = get_from_position(position, tree.root_node(), context, lsp_action);
         if output.is_none() {
-          info!("Hover: No token found");
+          debug!("Hover: No token found");
         }
 
         match output {

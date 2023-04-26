@@ -6,20 +6,41 @@ use lsp_types::Range;
 use lsp_types::Position;
 use lsp_types::TextDocumentContentChangeEvent;
 use once_cell::sync::Lazy;
+use tracing::debug;
 use tracing::error;
 use tracing::info;
-use tree_sitter::{Node, Point};
+use tree_sitter::{ Node, Point, Query, QueryCursor };
 
 use crate::datatypes::*;
+use super::loader::LANGUAGE_DOCS;
 use crate::documents::FullTextDocument;
-use super::doc_loader::LANGUAGE_DOCS;
 
-pub fn generate_lsp_range(
-    start_row: u32,
-    start_column: u32,
-    end_row: u32,
-    end_column: u32,
-) -> Range {
+macro_rules! query_for_nodes {
+  ($query:expr,$node:expr,$source:expr) => {
+    QueryCursor::new()
+      .captures(
+        &Query::new(cyber_tree_sitter::cyber_language(), $query).expect("unable to create query"),
+        $node, $source.as_bytes())
+      .map(|x| x.0.captures).flatten()
+      .map(|c| c.node)
+  };
+}
+
+macro_rules! query_for_ranges {
+  ($query:expr,$node:expr,$source:expr) => {
+    query_for_nodes!($query, $node, $source).map(|node| {
+      let start = node.start_position();
+      let end = node.end_position();
+
+      Range {
+        start: Position { line: start.row as u32, character: start.column as u32, },
+        end: Position { line: end.row as u32, character: end.column as u32, },
+      }
+    })
+  };
+}
+
+pub fn get_range(start_row: u32, start_column: u32, end_row: u32, end_column: u32,) -> Range {
     Range::new(
         Position::new(start_row, start_column),
         Position::new(end_row, end_column),
@@ -39,7 +60,7 @@ pub fn position_to_point(input: Position) -> Point {
   Point { row: input.line as usize, column: input.character as usize }
 }
 
-/// get the doc for on hover
+/// Search the documentation store for the relevant keyword details for the given position
 pub fn get_from_position(location: Position, root: Node, source: &str, lsp_action: String) -> Option<KeywordDetail> {
   match (get_string_at_pos(location, root, source), get_pos_type(location, root, source, PositionType::NotFind)) {
     (Some(message), _) => {
@@ -57,7 +78,7 @@ pub fn get_from_position(location: Position, root: Node, source: &str, lsp_actio
   }
 }
 
-/// Get string from current document at position the given position
+/// Get string from current document the given position
 pub fn get_string_at_pos(location: Position, root: Node, source: &str) -> Option<String> {
   let position = position_to_point(location);
   let source_array: Vec<&str> = source.lines().collect();
@@ -71,7 +92,10 @@ pub fn get_string_at_pos(location: Position, root: Node, source: &str) -> Option
         if recurse_pos.is_some() { return recurse_pos; };
       }
 
-      else if child.start_position().row == child.end_position().row && position.column <= child.end_position().column && position.column >= child.start_position().column {
+      else if child.start_position().row == child.end_position().row 
+        && position.column <= child.end_position().column 
+          && position.column >= child.start_position().column {
+                          
         let h = child.start_position().row;
         let x = child.start_position().column;
         let y = child.end_position().column;
@@ -86,7 +110,7 @@ pub fn get_string_at_pos(location: Position, root: Node, source: &str) -> Option
   None
 }
 
-/// from the position to get range
+/// Get Tree Node range based on the current position
 pub fn get_position_range(location: Position, root: Node) -> Option<Range> {
   let position = position_to_point(location);
   let mut cursor = root.walk();
@@ -97,8 +121,8 @@ pub fn get_position_range(location: Position, root: Node) -> Option<Range> {
       && position.row >= child.start_position().row
       {
         if child.child_count() != 0 {
-          let mabepos = get_position_range(location, child);
-          if mabepos.is_some() { return mabepos; }
+          let child_pos = get_position_range(location, child);
+          if child_pos.is_some() { return child_pos; }
         }
         // if is the same line
         else if child.start_position().row == child.end_position().row && 
@@ -115,14 +139,8 @@ pub fn get_position_range(location: Position, root: Node) -> Option<Range> {
   None
 }
 
-pub fn get_tree_sitter_edit_from_change(
-    change: &TextDocumentContentChangeEvent,
-    document: &mut FullTextDocument,
-    version: i64,
-) -> Option<InputEdit> {
-    if change.range.is_none() || change.range_length.is_none() {
-        return None;
-    }
+pub fn get_tree_edits(change: &TextDocumentContentChangeEvent, document: &mut FullTextDocument, version: i64,) -> Option<InputEdit> {
+    if change.range.is_none() || change.range_length.is_none() { return None; }
 
     let range = change.range.unwrap();
     let start = range.start;
@@ -140,15 +158,33 @@ pub fn get_tree_sitter_edit_from_change(
     let new_end_line = document.rope.char_to_line(new_end_char);
     let new_end_line_first_character = document.rope.line_to_char(new_end_line);
     let new_end_character = new_end_byte - new_end_line_first_character;
+
     Some(InputEdit {
-        start_byte,
-        old_end_byte,
-        new_end_byte,
+        start_byte, old_end_byte, new_end_byte,
         start_position: Point::new(start.line as usize, start.character as usize),
         old_end_position: Point::new(end.line as usize, end.character as usize),
         new_end_position: Point::new(new_end_line, new_end_character),
     })
 }
+
+// --| Diagnostic Helpers -------------
+// --|---------------------------------
+// Here due to macros not being able to be used in other modules
+pub fn get_parser_errors(source: &str, tree: Option<Tree>) -> Vec<Range> {
+  match tree {
+    Some(tree) => { 
+      query_for_ranges!("(ERROR) @error", tree.root_node(), source).collect() 
+    }
+    None => {
+      error!("tree was None when looking for parser errors");
+      vec![Range {
+        start: Position { line: 0, character: 0, },
+        end: Position { line: 1, character: 0, },
+      }]
+    }
+  }
+}
+
 
 // --| Language Definitions Storage ---
 // --|---------------------------------
@@ -195,21 +231,15 @@ pub enum LanguageConstruct {
 }
 
 pub fn get_pos_type( location: Position, root: Node, source: &str, inputtype: PositionType,) -> PositionType {
-  let mut position
-    = position_to_point(location);
+  let position = position_to_point(location);
   let source_array: Vec<&str> = source.lines().collect();
   let mut cursor = root.walk();
 
-  info!("get_pos_type: {:?}", inputtype);
-  
   for child in root.children(&mut cursor) {
-    // if is inside same line
-
-    info!("node info: {:?} child count: {:?} ", child.kind(), child.child_count());
     if position.row <= child.end_position().row && position.row >= child.start_position().row
     {
       if child.child_count() != 0 {
-        let jumptype = match child.kind() {
+        let _match_type = match child.kind() {
           "import_statement" | "assignment_statement" | "if_statement" => {
             let h = child.start_position().row;
             let ids = child.child(0).unwrap();
@@ -217,7 +247,7 @@ pub fn get_pos_type( location: Position, root: Node, source: &str, inputtype: Po
             let y = ids.end_position().column;
             let name = source_array[h][x..y].to_lowercase();
             
-            info!("name: {}", name);
+            debug!("name: {}", name);
             match name.as_str() { _ => PositionType::Variable, }
           }
           "normal_var" | "unquoted_argument" | "variable_def" | "variable" => {
@@ -225,7 +255,7 @@ pub fn get_pos_type( location: Position, root: Node, source: &str, inputtype: Po
           }
 
           "comment" => {
-            info!("Token Type: comment");  
+            debug!("Token Type: comment");  
             PositionType::Comment
           },
 
@@ -236,7 +266,7 @@ pub fn get_pos_type( location: Position, root: Node, source: &str, inputtype: Po
             let y = ids.end_position().column;
             let name = source_array[h][x..y].to_lowercase();
 
-            info!("name: {} kind: {}", name, child.kind());
+            debug!("name: {} kind: {}", name, child.kind());
             PositionType::Variable
           }
         };
@@ -248,10 +278,11 @@ pub fn get_pos_type( location: Position, root: Node, source: &str, inputtype: Po
           { return inputtype; }
     }
   }
-  info!("Returning None: {:?}", inputtype);
+  debug!("Returning None: {:?}", inputtype);
   PositionType::NotFind
 }
 
+#[derive(Debug, Clone)]
 pub struct TreeWrapper(pub Tree);
 impl std::fmt::Display for TreeWrapper {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -262,29 +293,22 @@ impl std::fmt::Display for TreeWrapper {
 
 pub fn pretty_display(f: &mut std::fmt::Formatter<'_>, root: Node) -> std::fmt::Result {
     let mut stack = Vec::new();
-    if !root.is_named() {
-        return Ok(());
-    }
+    if !root.is_named() { return Ok(()); }
+
+    writeln!(f, "\nSyntax Tree: Child Count: {}", &root.child_count())?;
+
     stack.push((root, 0));
     while let Some((node, level)) = stack.pop() {
         let kind = node.kind();
         let start = node.start_position();
         let end = node.end_position();
-        info!("{}{} [{}, {}] - [{}, {}] ", " ".repeat(level * 2), kind, start.row, start.column, end.row, end.column);
-        writeln!(
-            f,
-            "{}{} [{}, {}] - [{}, {}] ",
-            " ".repeat(level * 2),
-            kind,
-            start.row,
-            start.column,
-            end.row,
-            end.column
-        )?;
+        writeln!(f, "{}{} [{}, {}] - [{}, {}] ", " ".repeat(level * 2), kind, start.row, start.column, end.row, end.column)?;
+
         for i in (0..node.named_child_count()).rev() {
             let child = node.named_child(i).unwrap();
             stack.push((child, level + 1));
         }
     }
+
     Ok(())
 }

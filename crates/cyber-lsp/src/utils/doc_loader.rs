@@ -1,6 +1,6 @@
 use once_cell::sync::Lazy;
 
-pub mod doc_loader {
+pub mod loader {
     use tracing::info;
     use once_cell::sync::Lazy;
     use std::{collections::HashMap, path::PathBuf};

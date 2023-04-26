@@ -6,8 +6,8 @@ use crate::utils::treehelper::{get_pos_type, PositionType, get_from_position};
 use lsp_types::{CompletionItem, CompletionItemKind, MessageType, Position, CompletionResponse};
 use tracing::info;
 
-/// get the complet messages
-pub async fn get_completion( source: &str, location: Position, client: &tower_lsp::Client, local_path: &str,) -> Option<CompletionResponse> {
+/// get the completion messages
+pub async fn get_completion(source: &str, location: Position, client: &tower_lsp::Client, local_path: &str,) -> Option<CompletionResponse> {
     let lsp_action = "completion".to_string();  
 
     info!("Loading tree-sitter-cyber parser...");
@@ -28,9 +28,9 @@ pub async fn get_completion( source: &str, location: Position, client: &tower_ls
       info!("KeywordDetail: None");
     }
 
-    let postype = get_pos_type(location, tree.root_node(), source, PositionType::NotFind);
+    let pos_type = get_pos_type(location, tree.root_node(), source, PositionType::NotFind);
 
-    if let Some(mut message) = getsubcomplete(tree.root_node(), source, Path::new(local_path), postype, Some(location),){ 
+    if let Some(mut message) = get_nested_completion(tree.root_node(), source, Path::new(local_path), pos_type, Some(location),){ 
       complete.append(&mut message); 
     }
 
@@ -43,34 +43,29 @@ pub async fn get_completion( source: &str, location: Position, client: &tower_ls
 }
 /// get the variable from the loop
 /// use position to make only can complete which has show before
-fn getsubcomplete( input: tree_sitter::Node, source: &str, local_path: &Path, postype: PositionType, location: Option<Position>,) -> Option<Vec<CompletionItem>> {
+fn get_nested_completion(input: tree_sitter::Node, source: &str, local_path: &Path, pos_type: PositionType, location: Option<Position>,) -> Option<Vec<CompletionItem>> {
     if let Some(location) = location {
-        if input.start_position().row as u32 > location.line {
-            return None;
-        }
+        if input.start_position().row as u32 > location.line { return None; }
     }
 
-    let newsource: Vec<&str> = source.lines().collect();
-    let mut course = input.walk();
-    let mut complete: Vec<CompletionItem> = vec![];
+    let source_array: Vec<&str> = source.lines().collect();
+    let mut cursor = input.walk();
+    let mut completion_item: Vec<CompletionItem> = vec![];
 
-    for child in input.children(&mut course) {
+    for child in input.children(&mut cursor) {
         if let Some(location) = location {
-            if child.start_position().row as u32 > location.line {
-                // if this child is below row, then break all loop
-                break;
-            }
+            // Break if the child is on a different line
+            if child.start_position().row as u32 > location.line { break; }
         }
 
         match child.kind() {
-            "function_def" => {
+            "function_definition" => {
                 let h = child.start_position().row;
                 let ids = child.child(0).unwrap();
-                let ids = ids.child(2).unwrap();
                 let x = ids.start_position().column;
                 let y = ids.end_position().column;
-                let name = &newsource[h][x..y];
-                complete.push(CompletionItem {
+                let name = &source_array[h][x..y];
+                completion_item.push(CompletionItem {
                     label: format!("{name}()"),
                     kind: Some(CompletionItemKind::FUNCTION),
                     detail: Some(format!(
@@ -81,67 +76,20 @@ fn getsubcomplete( input: tree_sitter::Node, source: &str, local_path: &Path, po
                 });
             }
             
-            "macro_def" => {
-                let h = child.start_position().row;
-                let ids = child.child(0).unwrap();
-                let ids = ids.child(2).unwrap();
-                let x = ids.start_position().column;
-                let y = ids.end_position().column;
-                let name = &newsource[h][x..y];
-                complete.push(CompletionItem {
-                    label: format!("{name}()"),
-                    kind: Some(CompletionItemKind::FUNCTION),
-                    detail: Some(format!(
-                        "defined function\nfrom: {}",
-                        local_path.file_name().unwrap().to_str().unwrap()
-                    )),
-                    ..Default::default()
-                });
-            }
-            
-            "if_condition" | "foreach_loop" => {
+            "if_condition" | "for_range_loop" | "for_iterable_loop" => {
                 if let Some(mut message) =
-                    getsubcomplete(child, source, local_path, postype, location)
+                    get_nested_completion(child, source, local_path, pos_type, location)
                 {
-                    complete.append(&mut message);
+                    completion_item.append(&mut message);
                 }
-            }
-
-            "normal_command" => {
-                let h = child.start_position().row;
-                let ids = child.child(0).unwrap();
-                //let ids = ids.child(2).unwrap();
-                let x = ids.start_position().column;
-                let y = ids.end_position().column;
-                let name = newsource[h][x..y].to_lowercase();
-
-                if name == "include" && child.child_count() >= 3 {
-                    let ids = child.child(2).unwrap();
-                    if ids.start_position().row == ids.end_position().row {
-                        let h = ids.start_position().row;
-                        let x = ids.start_position().column;
-                        let y = ids.end_position().column;
-                        let name = &newsource[h][x..y];
-                        if name.split('.').count() != 1 {
-                            let subpath = local_path.parent().unwrap().join(name);
-                            if let Ok(true) = cyber_try_exists(&subpath) {
-                                if let Some(mut comps) =
-                                    scanner::scanner_include_complete(&subpath, postype)
-                                {
-                                    complete.append(&mut comps);
-                                }
-                            }
-                        }
-                    }
-                } 
             }
             _ => {}
         }
     }
-    if complete.is_empty() {
+    if completion_item.is_empty() {
         None
     } else {
-        Some(complete)
+        Some(completion_item)
     }
 }
 

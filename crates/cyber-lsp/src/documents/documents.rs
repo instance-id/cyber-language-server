@@ -75,7 +75,7 @@ impl TextDocuments {
   /// assert_eq!(sub_content, Some("ello rus"));
   /// ```
   pub fn get_document_content(&self, uri: &Url, _range: Option<Range>) -> Option<&str> {
-    self.0.get(uri).map(|document| document.get_text())
+    self.0.get(uri).map(|document| document.get_content())
   }
 
   /// Get specify document's language by giving Url

@@ -1,5 +1,6 @@
+use cyber_tree_sitter::{Tree, Parser};
 use ropey::Rope;
-use lsp_types::{ Position, Range, TextDocumentContentChangeEvent, Url };
+use lsp_types::{ Position, Range, TextDocumentContentChangeEvent, Url, DidOpenTextDocumentParams };
 
 // --| Text Document -------------
 // --|----------------------------
@@ -17,6 +18,9 @@ pub struct FullTextDocument {
   /// The content of the opened text document.
   pub text: String,
 
+  /// The tree-sitter tree of the opened text document.
+  pub tree: Option<Tree>,
+
   line_offset: Option<Vec<usize>>,
   pub rope: Rope,
 }
@@ -31,14 +35,25 @@ impl std::fmt::Display for FullTextDocument {
 
 impl FullTextDocument {
   /// Creates a new `FullTextDocument`.
+  pub fn from_params(params: &DidOpenTextDocumentParams, parser: &mut Parser) -> FullTextDocument {
+    let text = params.text_document.text.clone();
+
+    FullTextDocument {
+      language_id: params.text_document.language_id.clone(),
+      version: params.text_document.version.into(),
+      text: params.text_document.text.clone(),
+      uri: params.text_document.uri.clone(),
+      tree: parser.parse(&text, None),
+      rope: Rope::from_str(&text),
+      line_offset: None,
+    }
+  }
+
   pub fn new(uri: Url, language_id: String, version: i64, text: String) -> FullTextDocument {
     FullTextDocument {
-      uri,
-      language_id,
-      version,
-      text: text.clone(),
-      line_offset: None,
-      rope: Rope::from_str(&text),
+      uri, language_id, version,
+      text: text.clone(), tree: None,
+      line_offset: None, rope: Rope::from_str(&text),
     }
   }
 
@@ -57,6 +72,7 @@ impl FullTextDocument {
 
       } else if Self::is_full(&change) {
         self.text = change.text;
+        self.rope = Rope::from_str(&self.text);
         self.line_offset = None;
       }
 
@@ -146,7 +162,7 @@ impl FullTextDocument {
   }
 
   /// Returns the full text of the document if exists. Otherwise, returns an empty string.
-  pub fn get_text(&self) -> &str {
+  pub fn get_content(&self) -> &str {
     let end_char = self.rope.len_chars();
     return self.rope.slice(0..end_char).as_str().unwrap_or("")
   }

@@ -2,38 +2,39 @@ use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 
-use clap::{arg, Arg, Command};
-use cyber_tree_sitter::{Tree, Parser};
-use dashmap::DashMap;
 use lsp_types::Url;
-use tower_lsp::{LspService, Server};
+use dashmap::DashMap;
 use tokio::sync::Mutex;
 use tokio::net::TcpListener;
+use clap::{arg, Arg, Command};
+use cyber_tree_sitter::{Tree, Parser};
+use tower_lsp::{LspService, Server};
 
 use tracing::info;
-use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::filter;
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
 
+use datatypes::LogData;
 use crate::documents::FullTextDocument;
 
-mod complete;
-mod completions;
+mod utils;
+mod macros;
+mod handlers;
+mod documents;
 mod datatypes;
+mod completions;
 mod diagnostics;
 mod languageserver;
-mod utils;
-mod documents;
 mod semantic_tokens;
-mod handlers;
 
 struct Backend {
+  pub(crate) log_data: LogData,
   pub(crate) lsp_client: String,
   pub(crate) parser: Mutex<Parser>,
   pub(crate) client: tower_lsp::Client,
   pub(crate) parse_tree:Mutex<HashMap<Url, Tree>>,
   pub(crate) docs: Arc<Mutex<HashMap<lsp_types::Url, FullTextDocument>>>,
   pub workspace_map: DashMap<Url, String>,
-  // pub(crate) documents: TextDocuments,
 }
 
 struct State {
@@ -76,6 +77,10 @@ async fn main() {
       arg!(level: -l --level <Name> "The log level to use")
       .default_value("info").default_missing_value("info")
       .value_parser(["error", "warn", "info", "debug"]))
+
+    .arg( // --| Verbose ------------------------      
+      arg!(verbose: -v --verbose "Enable verbose logging")
+      .action(clap::ArgAction::SetTrue))
     
     .subcommand( // --| Sdtio Communication -----
       Command::new("stdio").long_flag("stdio").about("communicate via stdio"))
@@ -84,6 +89,13 @@ async fn main() {
       Command::new("tcp").long_flag("tcp").about("run with tcp").arg(
         Arg::new("port").long("port").short('P').help("listen to port")))
     .get_matches();
+
+  // Remove log file if exists
+  let log_file_dir = std::env::current_exe().unwrap().with_file_name("");
+  let log_file = log_file_dir.join("cyberls.log");
+  if log_file.exists() {
+    std::fs::remove_file(log_file).expect("error");
+  }
 
   let log_level = matches.get_one::<String>("level").expect("error");
   let log_file_dir = std::env::current_exe().unwrap().with_file_name("");
@@ -105,18 +117,19 @@ async fn main() {
     .with_writer(non_blocking)
     .init();
 
-  info!("Log Level: {}", &log_level);
-
   // --| Sdtio Communication -----
   match matches.subcommand() {
     Some(("stdio", _)) => {
       
+      let verbose = matches.get_flag("verbose");
       let lsp_client = matches.get_one::<String>("client").expect("error");
-      info!("Client Connected: {}", &lsp_client);
+      let log_data = LogData::new(filter, verbose);
+
+      info!("Client Connected: {} Log Level: {} Verbose: {}", &lsp_client, &log_data.log_level, &log_data.verbose);
 
       let (stdin, stdout) = (tokio::io::stdin(), tokio::io::stdout());
       let (service, socket) = LspService::new(|client| Backend {
-        client, 
+        client, log_data,
         workspace_map: DashMap::new(),  
         lsp_client: lsp_client.clone(),
         parse_tree: Mutex::new(HashMap::new()),
@@ -133,7 +146,9 @@ async fn main() {
       #[cfg(feature = "runtime-agnostic")]
       use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
+      let verbose = matches.get_flag("verbose");
       let lsp_client = matches.get_one::<String>("client").expect("error");
+      let log_data = LogData::new(filter, verbose);
 
       let stream = {
         // --| Use port if provided
@@ -166,7 +181,7 @@ async fn main() {
       let (read, write) = (read.compat(), write.compat_write());
 
       let (service, socket) = LspService::new(|client| Backend {
-        client, 
+        client, log_data,
         workspace_map: DashMap::new(),  
         lsp_client: lsp_client.clone(), 
         parse_tree: Mutex::new(HashMap::new()),

@@ -1,6 +1,6 @@
 use crate::utils::treehelper::PositionType;
 
-use super::getsubcomplete;
+use super::get_nested_completion;
 use lsp_types::CompletionItem;
 use std::fs;
 use std::path::PathBuf;
@@ -15,7 +15,7 @@ pub fn scanner_include_complete(
             let mut parser = cyber_tree_sitter::try_init_parser().expect("Parser failed to load");
             let thetree = parser.parse(content.clone(), None);
             let tree = thetree.unwrap();
-            getsubcomplete(tree.root_node(), content.as_str(), path, postype, None)
+            get_nested_completion(tree.root_node(), content.as_str(), path, postype, None)
         }
         Err(_) => None,
     }
