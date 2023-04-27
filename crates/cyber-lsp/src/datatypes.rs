@@ -55,6 +55,33 @@ impl LanguageDefinition {
 
 // --| Debug Structures ----------
 // --|----------------------------
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Config {
+  pub enable: bool,
+  pub verbose: bool,
+  pub show_warnings: bool,
+  pub unstable_features: bool,
+  pub performance_metrics: bool,
+  pub root_dir: Option<String>,
+  pub log_level: Option<String>,
+  pub client_name: Option<String>,
+}
+
+impl Config {
+  pub fn default() -> Config {
+    Config {
+      enable: true,
+      verbose:false, 
+      root_dir: None,
+      log_level: None,
+      client_name: None,
+      show_warnings: true,
+      unstable_features: false,
+      performance_metrics: false,
+    }
+  }
+}
+
 #[derive(Debug)]
 pub struct LogData {
   pub(crate) log_level: filter::LevelFilter,

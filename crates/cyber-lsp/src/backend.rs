@@ -2,9 +2,11 @@ use serde_json::Value;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::LanguageServer;
+use tracing::debug;
 use tracing::info;
 
 use crate::Backend;
+use crate::datatypes::Config;
 
 // --| Language Server Protocol (LSP) implementation
 #[tower_lsp::async_trait]
@@ -22,7 +24,7 @@ impl LanguageServer for Backend {
   }
 
   // --| Execute Command -------
-  async fn execute_command(&self, _: ExecuteCommandParams) -> Result<Option<Value>> {
+  async fn execute_command(&self, params: ExecuteCommandParams) -> Result<Option<Value>> {
     self.client.log_message(MessageType::INFO, "command executed!").await;
 
     match self.client.apply_edit(WorkspaceEdit::default()).await {
@@ -30,7 +32,8 @@ impl LanguageServer for Backend {
       Ok(_) => self.client.log_message(MessageType::INFO, "rejected").await,
       Err(err) => self.client.log_message(MessageType::ERROR, err).await,
     }
-    Ok(None)
+
+    self.on_execute_command(params).await
   }
 
   // --| File Open --------------------
@@ -69,7 +72,23 @@ impl LanguageServer for Backend {
   }
 
   // --| Configuration Change ---------
-  async fn did_change_configuration(&self, _: DidChangeConfigurationParams) {
+  async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
+    if params.settings.is_null() { return; }
+
+    if let Some(config) = params.settings.get("cyberls") {
+       if let Ok(new_config) = serde_json::from_value::<Config>(config.clone()) { 
+          self.log_data.lock().await.verbose = new_config.verbose;
+
+         {
+           let mut config = self.config.lock().await;
+           *config = new_config;
+         }
+
+         debug!("Configuration changed: {:?}", params);
+         return;
+       }
+    }
+
     self.client.log_message(MessageType::INFO, "configuration changed!").await;
   }
 
@@ -82,10 +101,8 @@ impl LanguageServer for Backend {
 
     for change in params.changes {
       if let FileChangeType::DELETED = change.typ {
-        // filewatcher::clear_error_packages();
       } else {
         let _path = change.uri.path();
-        // filewatcher::refresh_error_packages(path);
       }
     }
 

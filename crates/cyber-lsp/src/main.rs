@@ -14,24 +14,25 @@ use tracing::info;
 use tracing_subscriber::filter;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 
-use datatypes::LogData;
+use datatypes::{LogData, Config};
 use crate::documents::FullTextDocument;
 
 mod utils;
 mod macros;
+mod backend;
 mod handlers;
 mod documents;
 mod datatypes;
 mod completions;
 mod diagnostics;
-mod languageserver;
 mod semantic_tokens;
 
 struct Backend {
-  pub(crate) log_data: LogData,
   pub(crate) lsp_client: String,
   pub(crate) parser: Mutex<Parser>,
+  pub(crate) log_data: Mutex<LogData>,
   pub(crate) client: tower_lsp::Client,
+  pub(crate) config: Arc<Mutex<Config>>,
   pub(crate) parse_tree:Mutex<HashMap<Url, Tree>>,
   pub(crate) docs: Arc<Mutex<HashMap<lsp_types::Url, FullTextDocument>>>,
   pub workspace_map: DashMap<Url, String>,
@@ -129,11 +130,13 @@ async fn main() {
 
       let (stdin, stdout) = (tokio::io::stdin(), tokio::io::stdout());
       let (service, socket) = LspService::new(|client| Backend {
-        client, log_data,
+        client, 
+        log_data: Mutex::new(log_data),
         workspace_map: DashMap::new(),  
         lsp_client: lsp_client.clone(),
         parse_tree: Mutex::new(HashMap::new()),
         docs: Arc::new(Mutex::new(HashMap::new())),
+        config: Arc::new(Mutex::new(Config::default())),
         parser: Mutex::new(cyber_tree_sitter::init_parser()),
       });
 
@@ -181,11 +184,13 @@ async fn main() {
       let (read, write) = (read.compat(), write.compat_write());
 
       let (service, socket) = LspService::new(|client| Backend {
-        client, log_data,
+        client, 
+        log_data: Mutex::new(log_data),
         workspace_map: DashMap::new(),  
         lsp_client: lsp_client.clone(), 
         parse_tree: Mutex::new(HashMap::new()),
         docs: Arc::new(Mutex::new(HashMap::new())),
+        config: Arc::new(Mutex::new(Config::default())),
         parser: Mutex::new(cyber_tree_sitter::init_parser()),
       });
 

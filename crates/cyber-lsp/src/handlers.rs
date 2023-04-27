@@ -2,6 +2,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use cyber_tree_sitter::Tree;
+use serde_json::Value;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tracing::debug;
@@ -34,8 +35,11 @@ impl Backend{
   // --| Initialize handler -----------
   pub async fn on_initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
     let start = Instant::now();
-    let capabilities = params.capabilities;
     let mut state = State::new();
+    
+    let capabilities = params.capabilities;
+    let options = params.initialization_options;
+    debug!("Initialize: {:?}", options);
 
     // Last I heard, only vscode supports dynamic_registration
     // nvim does not support dynamic or static registration.
@@ -124,14 +128,14 @@ impl Backend{
     if let Some(diag) = errors {
       let mut diagnostic_items = vec![];
 
-      for (start, end, message, severity) in diag.inner {
-        let pointx = lsp_types::Position::new(start.row as u32, start.column as u32);
-        let pointy = lsp_types::Position::new(end.row as u32, end.column as u32);
+      for err in diag.entries {
+        let pointx = lsp_types::Position::new(err.start.row as u32, err.start.column as u32);
+        let pointy = lsp_types::Position::new(err.end.row as u32, err.end.column as u32);
         let range = Range { start: pointx, end: pointy };
 
         let diagnose = Diagnostic { 
-          range, severity, code: None, code_description: None,
-          source: None, message, related_information: None, tags: None, data: None,
+          range, severity: err.severity, code: None, code_description: None,
+          source: None, message: err.message, related_information: None, tags: None, data: None,
         };
 
         diagnostic_items.push(diagnose);
@@ -148,35 +152,42 @@ impl Backend{
     let start = Instant::now();
     let errors = get_parser_errors(&context, Some(tree.clone()));
 
-    let mut err_info: ErrorInfo = ErrorInfo { inner: vec![], };
+    let mut err_info: ErrorInfo = ErrorInfo::new();
 
     if errors.len() > 0 {
       for error in errors.iter() {
-        err_info.inner.push((
+        err_info.add(
             position_to_point(error.start), 
             position_to_point(error.end), 
             "Syntax Error".to_string(), 
             Some(DiagnosticSeverity::ERROR)
-           ));
-      } 
-    }
+           );
+    }}
 
-    debug!("Obtain Diagnostics: {:?}", start.elapsed().as_secs_f64());
+    debug!("Obtain Basic Diagnostics: {:?}", start.elapsed().as_secs_f64());
     self.publish_diagnostics(uri.clone(), Some(err_info)).await;
   }
 
   pub async fn obtain_full_diagnostics(&self, uri: Url, context: String) {
     let start = Instant::now();
+    let mut errors = ErrorInfo::new();
+
     let uri_path = Path::new(uri.path());
-    let diag_results = check_compile_error(&uri_path, &context);
-    // let _tree_results = check_tree_error(&uri_path, &context, tree.root_node());
+    let mut diag_results = check_compile_error(&uri_path, &context);
+    if diag_results.is_some() {
+      errors.combine(diag_results.as_mut().unwrap());
+    }
 
-    // let tree = self.parse_tree.lock().await.get(&uri).unwrap().clone();
-    // let _tree_results = check_tree_error(&uri_path, &context, tree.root_node());
+    let tree = self.parse_tree.lock().await.get(&uri).unwrap().clone();
+    let mut tree_results = check_tree_error(&uri_path, &context, tree.root_node());
+    if tree_results.is_some() {
+      errors.combine(tree_results.as_mut().unwrap());
+    }
 
-    self.publish_diagnostics(uri.clone(), diag_results).await;
+    if errors.entries.len() == 0{ self.publish_diagnostics(uri.clone(), None).await; }
+    else { self.publish_diagnostics(uri.clone(), Some(errors)).await; }
 
-    debug!("Obtain Diagnostics: {:?}", start.elapsed().as_secs_f64());
+    debug!("Obtain Full Diagnostics: {:?}", start.elapsed().as_secs_f64());
   }
 
 
@@ -200,7 +211,6 @@ impl Backend{
   pub async fn on_open(&self, params: DidOpenTextDocumentParams) {
     let start = Instant::now();
 
-    // info!("File Opened: {:?}", params.text_document.uri);
     let docs = &mut self.docs.lock().await; 
 
     let mut parser = self.parser.lock().await;
@@ -253,7 +263,7 @@ impl Backend{
         if let Some(edits) = edits { tree.edit(edits); }
       }
 
-      let level = &self.log_data;
+      let level = &self.log_data.lock().await;
       let new_tree: Tree;
       let content = document.rope.to_string();
       let uri = params.text_document.uri.clone();
@@ -262,10 +272,12 @@ impl Backend{
         new_tree = parser.parse(&content, Some(tree)).unwrap();
         let old_tree = parse_tree.insert(uri.clone(), new_tree.clone());
 
-        if level.verbose{
+        if level.verbose {
           debug!("{}", TreeWrapper(old_tree.unwrap().clone()));
           debug!("{}", TreeWrapper(new_tree.clone()));
         }
+
+        debug!("Verbose: {}", level.verbose);
 
         debug!("Incremental updating: {}ms", start.elapsed().as_secs_f64());
       } else{
@@ -378,13 +390,9 @@ impl Backend{
         let tree = ts_tree.unwrap();
 
         debug!("Hover: Looking up token at position: {:?} ctx: {:?} tree: {:?}", position, context, tree.root_node());
-
         let lsp_action = "hover".to_string();
-
         let output = get_from_position(position, tree.root_node(), context, lsp_action);
-        if output.is_none() {
-          debug!("Hover: No token found");
-        }
+        if output.is_none() { debug!("Hover: No token found"); }
 
         match output {
           Some(result) => {
@@ -427,5 +435,37 @@ impl Backend{
       None => Ok(None),
     }
   } 
+
+  // --| Execute Command Handler ------
+  pub async fn on_execute_command(&self, params: ExecuteCommandParams) -> Result<Option<Value>> {
+    debug!("Execute Command Requested: {:?}", &params);
+
+    let command = params.command;
+    let _args = &params.arguments;
+
+    match command.as_str() {
+      "cyberls.toggle_verbose" => {
+        let mut log_data = self.log_data.lock().await;
+        log_data.verbose = !log_data.verbose;
+
+        debug!("Verbose: {}", log_data.verbose);
+        self.client.log_message(MessageType::INFO, format!("Verbose: {}", log_data.verbose)).await;
+      },
+      // "cyberls.loglevel" => {
+      //   let debug = &mut self.log_data.log_level.clone();
+      //   // *debug = LevelFilter::try_from(args);
+      //   let command_params = match serde_json::value::from_value(args[0].clone()) {
+      //     Ok(value) => value,
+      //     Err(err) => {}
+      //   };
+      //   *debug = LevelFilter::from(command_params);
+      //
+      //   self.client.log_message(MessageType::INFO, format!("Debug: {}", *debug)).await;
+      // },
+      _ => {
+        self.client.log_message(MessageType::ERROR, format!("Unknown command: {}", command)).await;
+      }
+    }
+    Ok(None)
+  }
 }
- 

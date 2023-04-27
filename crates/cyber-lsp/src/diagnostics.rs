@@ -1,17 +1,43 @@
 use std::fs;
 use std::process::Command;
 use std::path::{Path, PathBuf};
+use cyber_tree_sitter::Point;
 use lsp_types::DiagnosticSeverity;
 use tracing::info;
 
 /// Check for syntax errors. If there is error,
 /// return the position of the error and message
+#[derive(Default)]
 pub struct ErrorInfo {
-  pub inner: Vec<(tree_sitter::Point, tree_sitter::Point, String, Option<DiagnosticSeverity>)>,
+  pub entries: Vec<ErrorEntry>,
 }
 
+impl ErrorInfo {
+  pub fn new() -> Self {
+    Self { entries: vec![] }
+  }
+
+  pub fn combine(&mut self, other: &mut ErrorInfo) {
+    self.entries.append(&mut other.entries);
+  }
+
+  pub fn add(&mut self, start: Point, end: Point, message: String, severity: Option<DiagnosticSeverity>) {
+    self.entries.push(ErrorEntry { start, end, message, severity });
+  }
+
+  fn is_empty(&self) -> bool { self.entries.is_empty() }
+}
+
+pub struct ErrorEntry {
+  pub start: Point,
+  pub end: Point,
+  pub message: String,
+  pub severity: Option<DiagnosticSeverity>,
+}
+
+
 pub fn check_compile_error(local_path: &Path, _source: &str) -> Option<ErrorInfo> {
-  let mut diag_result = vec![];
+  let mut diag_result = ErrorInfo::new();
   let path_str = local_path.to_str().unwrap();
 
   let output = if cfg!(target_os = "windows") {
@@ -38,31 +64,30 @@ pub fn check_compile_error(local_path: &Path, _source: &str) -> Option<ErrorInfo
       let err_row = err_lines[2].split(":").collect::<Vec<&str>>()[1].trim().parse::<usize>().unwrap();
       let err_col = err_lines[2].split(":").collect::<Vec<&str>>()[2].trim().parse::<usize>().unwrap();
 
-      diag_result.push((
+      diag_result.add(
         tree_sitter::Point{ row: err_row - 1, column: err_col }, 
         tree_sitter::Point{ row: err_row - 1, column: err_col }, 
         err_msg.to_string(), 
         Some(DiagnosticSeverity::ERROR),
-      ));
+      );
     }
   }
 
   if !results.is_empty() { info!("Results: {}", results); }
-
-  Some(ErrorInfo { inner: diag_result })
+  
+  Some(diag_result)
 }
 
 pub fn check_tree_error(_local_path: &Path, source: &str, input: tree_sitter::Node) -> Option<ErrorInfo> {
   let _source_array: Vec<&str> = source.lines().collect();
+  let mut error_info = ErrorInfo::new();
 
   if input.is_error() {
-    Some(ErrorInfo {
-      inner: vec![( input.start_position(), input.end_position(), "Grammar Error".to_string(), None,)],
-    })
+    error_info.add( input.start_position(), input.end_position(), "Grammar Error".to_string(), None);
+    Some(error_info)
   } else {
     let _cursor = input.walk();
     {
-      let output = vec![];
       // --| Since I don't know what diagnostics to --
       // --| add but this is a possible example. -----
 
@@ -106,10 +131,11 @@ pub fn check_tree_error(_local_path: &Path, source: &str, input: tree_sitter::No
 
       // --| Return with no diagnostic -- 
       // --| issues until I add some ----
-      if output.is_empty() {
+      if error_info.is_empty() {
         None
       } else {
-        Some(ErrorInfo { inner: output })
+        let _err = ErrorInfo::new();
+        Some(error_info)
       }
     }
   }
